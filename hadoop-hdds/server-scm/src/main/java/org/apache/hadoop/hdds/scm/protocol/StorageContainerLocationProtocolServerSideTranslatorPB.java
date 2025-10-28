@@ -29,7 +29,7 @@ import static org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProt
 import static org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.Type.ListContainer;
 import static org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.Type.ListPipelines;
 import static org.apache.hadoop.hdds.scm.protocol.StorageContainerLocationProtocol.ADMIN_COMMAND_TYPE;
-import static org.apache.hadoop.hdds.scm.protocol.StorageContainerLocationProtocol.FOLLOWER_READABLE_COMMAND_TYPES;
+import static org.apache.hadoop.hdds.scm.protocol.StorageContainerLocationProtocol.FOLLOWER_READABLE_COMMAND_TYPE;
 
 import com.google.protobuf.RpcController;
 import com.google.protobuf.ServiceException;
@@ -210,12 +210,10 @@ public final class StorageContainerLocationProtocolServerSideTranslatorPB
   @Override
   public ScmContainerLocationResponse submitRequest(RpcController controller,
       ScmContainerLocationRequest request) throws ServiceException {
-    // Trigger not leader exception unless:
-    // This is the leader node, or this is an admin command, 
-    // or this is a follower-readable command.
+    // not leader or not belong to admin command or follower-readable command.
     if (!scm.checkLeader()
         && !ADMIN_COMMAND_TYPE.contains(request.getCmdType())
-        && !FOLLOWER_READABLE_COMMAND_TYPES.contains(request.getCmdType())) {
+        && !FOLLOWER_READABLE_COMMAND_TYPE.contains(request.getCmdType())) {
       RatisUtil.checkRatisException(
           scm.getScmHAManager().getRatisServer().triggerNotLeaderException(),
           scm.getClientRpcPort(), scm.getScmId(), scm.getHostname(), ROLE_TYPE);
