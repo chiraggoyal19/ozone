@@ -86,38 +86,43 @@ public class NSSummaryTaskDbEventHandler {
   protected void handlePutKeyEvent(OmKeyInfo keyInfo, Map<Long,
       NSSummary> nsSummaryMap) throws IOException {
     long parentObjectId = keyInfo.getParentObjectID();
-    // Try to get the NSSummary from our local map that maps NSSummaries to IDs
-    NSSummary nsSummary = nsSummaryMap.get(parentObjectId);
-    if (nsSummary == null) {
+    long objectId = keyInfo.getObjectID();
+
+    // Get or create the key's NSSummary
+    NSSummary curNSSummary = nsSummaryMap.get(objectId);
+    if (curNSSummary == null) {
       // If we don't have it in this batch we try to get it from the DB
-      nsSummary = reconNamespaceSummaryManager.getNSSummary(parentObjectId);
+      curNSSummary = reconNamespaceSummaryManager.getNSSummary(objectId);
     }
-    if (nsSummary == null) {
+
+    if (curNSSummary == null) {
+      curNSSummary = new NSSummary();
+    }
+    curNSSummary.setParentId(parentObjectId);
+    nsSummaryMap.put(objectId, curNSSummary);
+
+    // Get or create the parent's NSSummary
+    NSSummary parentNSSummary = nsSummaryMap.get(parentObjectId);
+    if (parentNSSummary == null) {
+      parentNSSummary = reconNamespaceSummaryManager.getNSSummary(parentObjectId);
+    }
+    if (parentNSSummary == null) {
       // If we don't have it locally and in the DB we create a new instance
       // as this is a new ID
-      nsSummary = new NSSummary();
+      parentNSSummary = new NSSummary();
     }
-    int[] fileBucket = nsSummary.getFileSizeBucket();
 
-    // Update immediate parent's totals (includes all descendant files)
-    nsSummary.setNumOfFiles(nsSummary.getNumOfFiles() + 1);
-    nsSummary.setSizeOfFiles(nsSummary.getSizeOfFiles() + keyInfo.getDataSize());
-    // Before arithmetic operations, check for sentinel value
-    long currentReplSize = nsSummary.getReplicatedSizeOfFiles();
-    if (currentReplSize < 0) {
-      // Old data, initialize to 0 before first use
-      currentReplSize = 0;
-      nsSummary.setReplicatedSizeOfFiles(0);
-    }
-    nsSummary.setReplicatedSizeOfFiles(currentReplSize + keyInfo.getReplicatedSize());
+    // Update file size bucket in parent
+    int[] fileBucket = parentNSSummary.getFileSizeBucket();
     int binIndex = ReconUtils.getFileSizeBinIndex(keyInfo.getDataSize());
-
     ++fileBucket[binIndex];
-    nsSummary.setFileSizeBucket(fileBucket);
-    nsSummaryMap.put(parentObjectId, nsSummary);
+    parentNSSummary.setFileSizeBucket(fileBucket);
+    nsSummaryMap.put(parentObjectId, parentNSSummary);
 
-    // Propagate upwards to all parents in the parent chain
-    propagateSizeUpwards(parentObjectId, keyInfo.getDataSize(), keyInfo.getReplicatedSize(), 1, nsSummaryMap);
+    // Propagate the key's size/count upwards from the key's objectId
+    // propagateSizeUpwards will update parent, grandparent, etc.
+    propagateSizeUpwards(objectId, keyInfo.getDataSize(),
+        keyInfo.getReplicatedSize(), 1, nsSummaryMap);
   }
 
   protected void handlePutDirEvent(OmDirectoryInfo directoryInfo,
@@ -174,38 +179,44 @@ public class NSSummaryTaskDbEventHandler {
   protected void handleDeleteKeyEvent(OmKeyInfo keyInfo,
                                       Map<Long, NSSummary> nsSummaryMap)
       throws IOException {
+    long deletedKeyObjectId = keyInfo.getObjectID();
     long parentObjectId = keyInfo.getParentObjectID();
-    // Try to get the NSSummary from our local map that maps NSSummaries to IDs
-    NSSummary nsSummary = nsSummaryMap.get(parentObjectId);
-    if (nsSummary == null) {
-      // If we don't have it in this batch we try to get it from the DB
-      nsSummary = reconNamespaceSummaryManager.getNSSummary(parentObjectId);
+    
+    // Get the deleted key's NSSummary
+    NSSummary deletedKeySummary = nsSummaryMap.get(deletedKeyObjectId);
+    if (deletedKeySummary == null) {
+      deletedKeySummary = reconNamespaceSummaryManager.getNSSummary(deletedKeyObjectId);
+    }
+    
+    // Get the parent directory's NSSummary
+    NSSummary parentNsSummary = nsSummaryMap.get(parentObjectId);
+    if (parentNsSummary == null) {
+      parentNsSummary = reconNamespaceSummaryManager.getNSSummary(parentObjectId);
     }
 
     // Just in case the OmKeyInfo isn't correctly written.
-    if (nsSummary == null) {
+    if (parentNsSummary == null) {
       LOG.error("The namespace table is not correctly populated.");
       return;
     }
-    int[] fileBucket = nsSummary.getFileSizeBucket();
 
+    // Update file size bucket in parent
+    int[] fileBucket = parentNsSummary.getFileSizeBucket();
     int binIndex = ReconUtils.getFileSizeBinIndex(keyInfo.getDataSize());
-
-    // Decrement immediate parent's totals (these fields now represent totals)
-    nsSummary.setNumOfFiles(nsSummary.getNumOfFiles() - 1);
-    nsSummary.setSizeOfFiles(nsSummary.getSizeOfFiles() - keyInfo.getDataSize());
-    long currentReplSize = nsSummary.getReplicatedSizeOfFiles();
-    long keyReplSize = keyInfo.getReplicatedSize();
-    if (currentReplSize >= 0 && keyReplSize >= 0) {
-      nsSummary.setReplicatedSizeOfFiles(currentReplSize - keyReplSize);
-    }
     --fileBucket[binIndex];
-    nsSummary.setFileSizeBucket(fileBucket);
-    nsSummaryMap.put(parentObjectId, nsSummary);
+    parentNsSummary.setFileSizeBucket(fileBucket);
+    nsSummaryMap.put(parentObjectId, parentNsSummary);
 
-    // Propagate upwards to all parents in the parent chain
-    propagateSizeUpwards(parentObjectId, -keyInfo.getDataSize(),
+    // Propagate the deleted key's size/count upward (as negative deltas)
+    // propagateSizeUpwards will update parent, grandparent, etc.
+    propagateSizeUpwards(deletedKeyObjectId, -keyInfo.getDataSize(),
         -keyInfo.getReplicatedSize(), -1, nsSummaryMap);
+    
+    // Set the deleted key's parentId to 0 (unlink it)
+    if (deletedKeySummary != null) {
+      deletedKeySummary.setParentId(0);
+      nsSummaryMap.put(deletedKeyObjectId, deletedKeySummary);
+    }
   }
 
   protected void handleDeleteDirEvent(OmDirectoryInfo directoryInfo,
