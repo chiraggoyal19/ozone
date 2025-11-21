@@ -86,20 +86,7 @@ public class NSSummaryTaskDbEventHandler {
   protected void handlePutKeyEvent(OmKeyInfo keyInfo, Map<Long,
       NSSummary> nsSummaryMap) throws IOException {
     long parentObjectId = keyInfo.getParentObjectID();
-    long objectId = keyInfo.getObjectID();
-
-    // Get or create the key's NSSummary
-    NSSummary curNSSummary = nsSummaryMap.get(objectId);
-    if (curNSSummary == null) {
-      // If we don't have it in this batch we try to get it from the DB
-      curNSSummary = reconNamespaceSummaryManager.getNSSummary(objectId);
-    }
-
-    if (curNSSummary == null) {
-      curNSSummary = new NSSummary();
-    }
-    curNSSummary.setParentId(parentObjectId);
-    nsSummaryMap.put(objectId, curNSSummary);
+    long putKeyobjectId = keyInfo.getObjectID();
 
     // Get or create the parent's NSSummary
     NSSummary parentNSSummary = nsSummaryMap.get(parentObjectId);
@@ -119,9 +106,9 @@ public class NSSummaryTaskDbEventHandler {
     parentNSSummary.setFileSizeBucket(fileBucket);
     nsSummaryMap.put(parentObjectId, parentNSSummary);
 
-    // Propagate the key's size/count upwards from the key's objectId
+    // Propagate the key's size/count upwards from the key's putKeyobjectId
     // propagateSizeUpwards will update parent, grandparent, etc.
-    propagateSizeUpwards(objectId, keyInfo.getDataSize(),
+    propagateSizeUpwards(putKeyobjectId, keyInfo.getDataSize(),
         keyInfo.getReplicatedSize(), 1, nsSummaryMap);
   }
 
@@ -181,13 +168,7 @@ public class NSSummaryTaskDbEventHandler {
       throws IOException {
     long deletedKeyObjectId = keyInfo.getObjectID();
     long parentObjectId = keyInfo.getParentObjectID();
-    
-    // Get the deleted key's NSSummary
-    NSSummary deletedKeySummary = nsSummaryMap.get(deletedKeyObjectId);
-    if (deletedKeySummary == null) {
-      deletedKeySummary = reconNamespaceSummaryManager.getNSSummary(deletedKeyObjectId);
-    }
-    
+
     // Get the parent directory's NSSummary
     NSSummary parentNsSummary = nsSummaryMap.get(parentObjectId);
     if (parentNsSummary == null) {
@@ -211,12 +192,7 @@ public class NSSummaryTaskDbEventHandler {
     // propagateSizeUpwards will update parent, grandparent, etc.
     propagateSizeUpwards(deletedKeyObjectId, -keyInfo.getDataSize(),
         -keyInfo.getReplicatedSize(), -1, nsSummaryMap);
-    
-    // Set the deleted key's parentId to 0 (unlink it)
-    if (deletedKeySummary != null) {
-      deletedKeySummary.setParentId(0);
-      nsSummaryMap.put(deletedKeyObjectId, deletedKeySummary);
-    }
+
   }
 
   protected void handleDeleteDirEvent(OmDirectoryInfo directoryInfo,
